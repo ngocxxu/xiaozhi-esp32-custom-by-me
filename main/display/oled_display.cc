@@ -388,7 +388,7 @@ void OledDisplay::SetupUI_128x64() {
     auto icon_font = lvgl_theme->icon_font()->font(); 
 
     auto screen = lv_screen_active();
-    lv_obj_clean(screen); // Xóa sạch màn hình cũ
+    lv_obj_clean(screen); // Clear the previous screen
     lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
 
     // --- TẦNG 1: TOP BAR (WIFI, PIN) - Cao 16px ---
@@ -400,13 +400,13 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_set_style_pad_all(top_bar_, 0, 0);
     lv_obj_set_scrollbar_mode(top_bar_, LV_SCROLLBAR_MODE_OFF);
 
-    // Wifi Icon (Góc trái)
+    // Wifi icon (left corner)
     network_label_ = lv_label_create(top_bar_);
     lv_label_set_text(network_label_, "");
     lv_obj_set_style_text_font(network_label_, icon_font, 0);
     lv_obj_align(network_label_, LV_ALIGN_LEFT_MID, 2, 0);
 
-    // Các icon bên phải (Mute, Pin, Clock)
+    // Right-side icons (Mute, Pin, Clock)
     lv_obj_t* right_icons = lv_obj_create(top_bar_);
     lv_obj_set_size(right_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(right_icons, LV_OPA_TRANSP, 0);
@@ -433,7 +433,7 @@ void OledDisplay::SetupUI_128x64() {
 
 
     // --- TẦNG 2: STATUS BAR (TEXT THÔNG BÁO) - Cao 14px ---
-    // Nằm ngay dưới Top Bar (Y = 16)
+    // Just below Top Bar (Y = 16)
     status_bar_ = lv_obj_create(screen);
     lv_obj_set_size(status_bar_, 128, 14); 
     lv_obj_align(status_bar_, LV_ALIGN_TOP_MID, 0, 16); 
@@ -573,7 +573,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_set_style_anim(chat_message_label_, &a_64, LV_PART_MAIN);
     lv_obj_set_style_anim_duration(chat_message_label_, lv_anim_speed_clamped(60, 300, 60000), LV_PART_MAIN);
 
-    // Popup pin yếu (giữ nguyên logic cũ)
+    // Low battery popup (keep existing logic)
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_size(low_battery_popup_, LV_HOR_RES * 0.9, text_font->line_height * 2);
