@@ -20,10 +20,28 @@ private:
     lv_obj_t* container_ = nullptr;
     lv_obj_t* side_bar_ = nullptr;
     lv_obj_t *emotion_label_ = nullptr;
+
+    // --- FIX FROM HERE (Draw Robot face) ---
+    lv_obj_t* face_container_ = nullptr;
+    lv_obj_t* left_eye_ = nullptr;
+    lv_obj_t* right_eye_ = nullptr;
+    lv_obj_t* mouth_ = nullptr;
+    lv_obj_t* status_face_container_ = nullptr;
+    lv_obj_t* status_left_eye_ = nullptr;
+    lv_obj_t* status_right_eye_ = nullptr;
+    lv_obj_t* status_mouth_ = nullptr;
+    // --- END OF FIX ---
+
+    lv_timer_t* idle_blink_timer_ = nullptr;
+    lv_timer_t* idle_blink_open_timer_ = nullptr;
+
     lv_obj_t* chat_message_label_ = nullptr;
 
     virtual bool Lock(int timeout_ms = 0) override;
     virtual void Unlock() override;
+
+    static void IdleBlinkTimerCb(lv_timer_t* timer);
+    static void IdleBlinkOpenCb(lv_timer_t* timer);
 
     void SetupUI_128x64();
     void SetupUI_128x32();
@@ -33,6 +51,7 @@ public:
     ~OledDisplay();
 
     virtual void SetupUI() override;
+    virtual void SetStatus(const char* status) override;
     virtual void SetChatMessage(const char* role, const char* content) override;
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetTheme(Theme* theme) override;
