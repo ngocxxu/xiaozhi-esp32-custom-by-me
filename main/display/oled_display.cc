@@ -586,7 +586,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
 
-    idle_blink_timer_ = lv_timer_create(IdleBlinkTimerCb, 4000, this);
+    idle_blink_timer_ = lv_timer_create(IdleBlinkTimerCb, 3000, this);
 }
 
 void OledDisplay::SetupUI_128x32() {
@@ -716,20 +716,18 @@ void OledDisplay::SetEmotion(const char* emotion) {
         return;
     } else if (emo.find("thinking") != std::string::npos) {
         if (left_eye_line_ != nullptr && right_eye_line_ != nullptr) {
-            lv_obj_add_flag(left_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(left_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(left_eye_line_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(right_eye_line_, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(left_eye_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(right_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_size(right_eye_, 14, 20);
         }
-        lv_obj_set_size(left_eye_, 14, 20);
-        lv_obj_set_size(right_eye_, 14, 4);
         if (mouth_) {
             lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_arc_set_angles(mouth_, 20, 160);
+            lv_obj_set_style_arc_width(mouth_, 3, LV_PART_INDICATOR);
         }
-        if (face_container_ != nullptr) {
-            lv_obj_invalidate(face_container_);
-        }
+        if (face_container_ != nullptr) lv_obj_invalidate(face_container_);
         return;
     } else if (emo.find("listening") != std::string::npos) {
         if (left_eye_line_ != nullptr && right_eye_line_ != nullptr) {
