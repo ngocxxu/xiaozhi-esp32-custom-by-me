@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <algorithm>
 
@@ -111,11 +112,23 @@ OledDisplay::~OledDisplay() {
             lv_timer_delete(idle_blink_open_timer_);
             idle_blink_open_timer_ = nullptr;
         }
+        if (idle_sleep_timer_ != nullptr) {
+            lv_timer_delete(idle_sleep_timer_);
+            idle_sleep_timer_ = nullptr;
+        }
+        if (mouth_line_ != nullptr) {
+            lv_obj_del(mouth_line_);
+            mouth_line_ = nullptr;
+        }
         if (face_container_ != nullptr) {
             lv_obj_del(face_container_);
             face_container_ = nullptr;
             left_eye_ = nullptr;
             right_eye_ = nullptr;
+            left_eye_line_ = nullptr;
+            right_eye_line_ = nullptr;
+            left_eye_arc_ = nullptr;
+            right_eye_arc_ = nullptr;
             mouth_ = nullptr;
         }
         if (low_battery_popup_ != nullptr) {
@@ -128,13 +141,13 @@ OledDisplay::~OledDisplay() {
             content_right_ = nullptr;
             chat_message_label_ = nullptr;
         }
+        if (mode_hint_label_ != nullptr) {
+            lv_obj_del(mode_hint_label_);
+            mode_hint_label_ = nullptr;
+        }
         if (status_bar_ != nullptr) {
             status_label_ = nullptr;
             notification_label_ = nullptr;
-            status_face_container_ = nullptr;
-            status_left_eye_ = nullptr;
-            status_right_eye_ = nullptr;
-            status_mouth_ = nullptr;
             lv_obj_del(status_bar_);
             status_bar_ = nullptr;
         }
@@ -142,6 +155,7 @@ OledDisplay::~OledDisplay() {
             network_label_ = nullptr;
             mute_label_ = nullptr;
             battery_label_ = nullptr;
+            time_label_ = nullptr;
             lv_obj_del(top_bar_);
             top_bar_ = nullptr;
         }
@@ -215,30 +229,122 @@ void OledDisplay::SetChatMessage(const char* role, const char* content) {
             }
         } else {
             lv_label_set_text(chat_message_label_, content_str.c_str());
-            lv_obj_remove_flag(content_right_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(content_right_, LV_OBJ_FLAG_HIDDEN);
+            if (time_label_ != nullptr) {
+                lv_obj_set_width(time_label_, 128);
+                lv_label_set_long_mode(time_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+                lv_label_set_text(time_label_, content_str.c_str());
+                lv_obj_remove_flag(time_label_, LV_OBJ_FLAG_HIDDEN);
+            }
             if (face_container_ != nullptr) {
-                lv_obj_add_flag(face_container_, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_remove_flag(face_container_, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (mouth_ != nullptr) {
+                lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             }
         }
     }
 }
 
+void OledDisplay::ShowNotification(const char* notification, int duration_ms) {
+    LvglDisplay::ShowNotification(notification, duration_ms);
+    if (face_container_ == nullptr) return;
+    DisplayLockGuard lock(this);
+    lv_obj_add_flag(face_container_, LV_OBJ_FLAG_HIDDEN);
+    if (mouth_ != nullptr) lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+    if (mouth_line_ != nullptr) lv_obj_add_flag(mouth_line_, LV_OBJ_FLAG_HIDDEN);
+}
+
 void OledDisplay::SetStatus(const char* status) {
-    if (status_face_container_ == nullptr) {
+    if (face_container_ == nullptr) {
         LvglDisplay::SetStatus(status);
         return;
     }
     DisplayLockGuard lock(this);
     if (status_label_ == nullptr) return;
-    if (strcmp(status, Lang::Strings::LISTENING) == 0 || strcmp(status, Lang::Strings::SPEAKING) == 0) {
+    if (strcmp(status, Lang::Strings::LISTENING) == 0 || strcmp(status, Lang::Strings::SPEAKING) == 0
+        || strcmp(status, Lang::Strings::CONNECTING) == 0) {
+        if (idle_sleep_timer_ != nullptr) {
+            lv_timer_del(idle_sleep_timer_);
+            idle_sleep_timer_ = nullptr;
+        }
         lv_obj_add_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(status_face_container_, LV_OBJ_FLAG_HIDDEN);
+        if (network_label_ != nullptr) {
+            lv_obj_add_flag(network_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (time_label_ != nullptr) {
+            lv_obj_set_width(time_label_, 128);
+            lv_label_set_long_mode(time_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+            lv_label_set_text(time_label_, status);
+            lv_obj_remove_flag(time_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (mode_hint_label_ != nullptr) {
+            lv_obj_add_flag(mode_hint_label_, LV_OBJ_FLAG_HIDDEN);
+        }
     } else {
-        lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(status_face_container_, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(status_label_, status);
-        lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+        if (mode_hint_label_ != nullptr) {
+            lv_obj_add_flag(mode_hint_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (network_label_ != nullptr) {
+            lv_obj_remove_flag(network_label_, LV_OBJ_FLAG_HIDDEN);
+        }
         lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
+        bool chat_visible = (content_right_ != nullptr && !lv_obj_has_flag(content_right_, LV_OBJ_FLAG_HIDDEN));
+        size_t len = strlen(status);
+        bool is_time = (len == 5 && status[2] == ':');
+        bool is_idle = (strcmp(status, Lang::Strings::STANDBY) == 0 || is_time);
+        if (is_idle && !chat_visible) {
+            if (face_container_ != nullptr) {
+                lv_obj_remove_flag(face_container_, LV_OBJ_FLAG_HIDDEN);
+            }
+            bool is_sleep = (current_emotion_.find("sleep") != std::string::npos);
+            if (is_sleep) {
+                if (mouth_ != nullptr) lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+                if (mouth_line_ != nullptr) lv_obj_remove_flag(mouth_line_, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                if (mouth_ != nullptr) lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+                if (mouth_line_ != nullptr) lv_obj_add_flag(mouth_line_, LV_OBJ_FLAG_HIDDEN);
+            }
+        } else {
+            if (face_container_ != nullptr) lv_obj_add_flag(face_container_, LV_OBJ_FLAG_HIDDEN);
+            if (mouth_ != nullptr) lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+            if (mouth_line_ != nullptr) lv_obj_add_flag(mouth_line_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (is_time && time_label_ != nullptr) {
+            lv_obj_set_width(time_label_, LV_SIZE_CONTENT);
+            lv_label_set_long_mode(time_label_, LV_LABEL_LONG_WRAP);
+            lv_label_set_text(time_label_, status);
+            lv_obj_remove_flag(time_label_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            if (time_label_ != nullptr && strcmp(status, Lang::Strings::STANDBY) != 0) {
+                lv_obj_add_flag(time_label_, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (strcmp(status, Lang::Strings::STANDBY) == 0) {
+                if (idle_sleep_timer_ != nullptr) {
+                    lv_timer_del(idle_sleep_timer_);
+                    idle_sleep_timer_ = nullptr;
+                }
+                idle_sleep_timer_ = lv_timer_create(IdleSleepTimerCb, 30000, this);
+                lv_timer_set_repeat_count(idle_sleep_timer_, 1);
+                lv_obj_add_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+                if (time_label_ != nullptr) {
+                    time_t now = time(nullptr);
+                    struct tm* tm = localtime(&now);
+                    if (tm && tm->tm_year >= (2025 - 1900)) {
+                        char time_str[16];
+                        strftime(time_str, sizeof(time_str), "%H:%M", tm);
+                        lv_obj_set_width(time_label_, LV_SIZE_CONTENT);
+                        lv_label_set_long_mode(time_label_, LV_LABEL_LONG_WRAP);
+                        lv_label_set_text(time_label_, time_str);
+                        lv_obj_remove_flag(time_label_, LV_OBJ_FLAG_HIDDEN);
+                    }
+                }
+            } else {
+                lv_label_set_text(status_label_, status);
+                lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
     last_status_update_time_ = std::chrono::system_clock::now();
 }
@@ -247,12 +353,19 @@ void OledDisplay::IdleBlinkOpenCb(lv_timer_t* timer) {
     auto* self = static_cast<OledDisplay*>(lv_timer_get_user_data(timer));
     self->idle_blink_open_timer_ = nullptr;
     if (!self->Lock(0)) return;
-    lv_obj_set_size(self->left_eye_, 10, 12);
-    lv_obj_set_size(self->right_eye_, 10, 12);
+    lv_obj_set_size(self->left_eye_, 14, 20);
+    lv_obj_set_size(self->right_eye_, 14, 20);
     if (self->face_container_ != nullptr) {
         lv_obj_invalidate(self->face_container_);
     }
     self->Unlock();
+}
+
+void OledDisplay::IdleSleepTimerCb(lv_timer_t* timer) {
+    auto* self = static_cast<OledDisplay*>(lv_timer_get_user_data(timer));
+    self->idle_sleep_timer_ = nullptr;
+    if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) return;
+    self->SetEmotion("sleep");
 }
 
 void OledDisplay::IdleBlinkTimerCb(lv_timer_t* timer) {
@@ -260,8 +373,8 @@ void OledDisplay::IdleBlinkTimerCb(lv_timer_t* timer) {
     if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) return;
     if (self->left_eye_ == nullptr) return;
     if (!self->Lock(0)) return;
-    lv_obj_set_size(self->left_eye_, 10, 2);
-    lv_obj_set_size(self->right_eye_, 10, 2);
+    lv_obj_set_size(self->left_eye_, 14, 2);
+    lv_obj_set_size(self->right_eye_, 14, 2);
     self->Unlock();
     self->idle_blink_open_timer_ = lv_timer_create(IdleBlinkOpenCb, 80, self);
     lv_timer_set_repeat_count(self->idle_blink_open_timer_, 1);
@@ -289,11 +402,11 @@ void OledDisplay::SetupUI_128x64() {
 
     // Wifi Icon (Góc trái)
     network_label_ = lv_label_create(top_bar_);
-    lv_label_set_text(network_label_, ""); 
+    lv_label_set_text(network_label_, "");
     lv_obj_set_style_text_font(network_label_, icon_font, 0);
     lv_obj_align(network_label_, LV_ALIGN_LEFT_MID, 2, 0);
 
-    // Các icon bên phải (Mute, Pin)
+    // Các icon bên phải (Mute, Pin, Clock)
     lv_obj_t* right_icons = lv_obj_create(top_bar_);
     lv_obj_set_size(right_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(right_icons, LV_OPA_TRANSP, 0);
@@ -311,6 +424,13 @@ void OledDisplay::SetupUI_128x64() {
     lv_label_set_text(battery_label_, "");
     lv_obj_set_style_text_font(battery_label_, icon_font, 0);
 
+    time_label_ = lv_label_create(right_icons);
+    lv_label_set_text(time_label_, "");
+    lv_obj_set_style_text_font(time_label_, text_font, 0);
+    lv_obj_set_style_text_color(time_label_, lv_color_black(), 0);
+    lv_obj_set_style_pad_left(time_label_, 4, 0);
+    lv_obj_add_flag(time_label_, LV_OBJ_FLAG_HIDDEN);
+
 
     // --- TẦNG 2: STATUS BAR (TEXT THÔNG BÁO) - Cao 14px ---
     // Nằm ngay dưới Top Bar (Y = 16)
@@ -324,6 +444,7 @@ void OledDisplay::SetupUI_128x64() {
 
     notification_label_ = lv_label_create(status_bar_);
     lv_obj_set_width(notification_label_, 128);
+    lv_label_set_long_mode(notification_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(notification_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(notification_label_, lv_color_black(), 0);
     lv_label_set_text(notification_label_, "");
@@ -338,74 +459,98 @@ void OledDisplay::SetupUI_128x64() {
     lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
     lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, 0);
 
-    status_face_container_ = lv_obj_create(status_bar_);
-    lv_obj_set_size(status_face_container_, 40, 14);
-    lv_obj_align(status_face_container_, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_opa(status_face_container_, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(status_face_container_, 0, 0);
-    lv_obj_set_style_pad_all(status_face_container_, 0, 0);
-    lv_obj_add_flag(status_face_container_, LV_OBJ_FLAG_HIDDEN);
-
-    status_left_eye_ = lv_obj_create(status_face_container_);
-    lv_obj_set_size(status_left_eye_, 4, 6);
-    lv_obj_set_style_radius(status_left_eye_, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(status_left_eye_, lv_color_black(), 0);
-    lv_obj_set_style_border_width(status_left_eye_, 0, 0);
-    lv_obj_align(status_left_eye_, LV_ALIGN_TOP_LEFT, 4, 2);
-
-    status_right_eye_ = lv_obj_create(status_face_container_);
-    lv_obj_set_size(status_right_eye_, 4, 6);
-    lv_obj_set_style_radius(status_right_eye_, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(status_right_eye_, lv_color_black(), 0);
-    lv_obj_set_style_border_width(status_right_eye_, 0, 0);
-    lv_obj_align(status_right_eye_, LV_ALIGN_TOP_RIGHT, -4, 2);
-
-    status_mouth_ = lv_arc_create(status_face_container_);
-    lv_obj_set_size(status_mouth_, 8, 8);
-    lv_arc_set_rotation(status_mouth_, 0);
-    lv_arc_set_bg_angles(status_mouth_, 0, 360);
-    lv_obj_set_style_arc_width(status_mouth_, 0, LV_PART_MAIN);
-    lv_arc_set_angles(status_mouth_, 20, 160);
-    lv_obj_remove_style(status_mouth_, NULL, LV_PART_KNOB);
-    lv_obj_set_style_arc_width(status_mouth_, 1, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(status_mouth_, lv_color_black(), LV_PART_INDICATOR);
-    lv_obj_align(status_mouth_, LV_ALIGN_BOTTOM_MID, 0, -1);
-
-    // --- TẦNG 3: MẶT ROBOT + VÙNG CHAT ---
-    // Khu vực này cao khoảng 34px (64 - 16 - 14)
+    // --- TẦNG 2+3: VÙNG MẮT (16-48px) ---
     face_container_ = lv_obj_create(screen);
-    lv_obj_set_size(face_container_, 64, 32); 
-    lv_obj_align(face_container_, LV_ALIGN_BOTTOM_MID, 0, -2); // Căn sát đáy
+    lv_obj_set_size(face_container_, 128, 32);
+    lv_obj_align(face_container_, LV_ALIGN_TOP_MID, 0, 16);
     lv_obj_set_style_bg_opa(face_container_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(face_container_, 0, 0);
     lv_obj_set_style_pad_all(face_container_, 0, 0);
 
-    // Mắt Trái (Size nhỏ: 10x12)
     left_eye_ = lv_obj_create(face_container_);
-    lv_obj_set_size(left_eye_, 10, 12); 
+    lv_obj_set_size(left_eye_, 14, 20);
     lv_obj_set_style_radius(left_eye_, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(left_eye_, lv_color_black(), 0);
     lv_obj_set_style_border_width(left_eye_, 0, 0);
-    lv_obj_align(left_eye_, LV_ALIGN_TOP_LEFT, 12, 5); // Cách lề trái 12px
+    lv_obj_align(left_eye_, LV_ALIGN_LEFT_MID, 24, 0);
 
-    // Mắt Phải (Size nhỏ: 10x12)
     right_eye_ = lv_obj_create(face_container_);
-    lv_obj_set_size(right_eye_, 10, 12);
+    lv_obj_set_size(right_eye_, 14, 20);
     lv_obj_set_style_radius(right_eye_, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(right_eye_, lv_color_black(), 0);
     lv_obj_set_style_border_width(right_eye_, 0, 0);
-    lv_obj_align(right_eye_, LV_ALIGN_TOP_RIGHT, -12, 5); // Cách lề phải 12px
+    lv_obj_align(right_eye_, LV_ALIGN_RIGHT_MID, -24, 0);
 
-    mouth_ = lv_arc_create(face_container_);
-    lv_obj_set_size(mouth_, 16, 16);
+    static const lv_point_precise_t left_eye_angle_pts[] = {{0, 0}, {14, 10}, {0, 20}};
+    static const lv_point_precise_t right_eye_angle_pts[] = {{14, 0}, {0, 10}, {14, 20}};
+    left_eye_line_ = lv_line_create(face_container_);
+    lv_line_set_points(left_eye_line_, left_eye_angle_pts, 3);
+    lv_obj_set_style_line_width(left_eye_line_, 2, 0);
+    lv_obj_set_style_line_color(left_eye_line_, lv_color_black(), 0);
+    lv_obj_set_size(left_eye_line_, 14, 20);
+    lv_obj_align(left_eye_line_, LV_ALIGN_LEFT_MID, 24, 0);
+    lv_obj_add_flag(left_eye_line_, LV_OBJ_FLAG_HIDDEN);
+    right_eye_line_ = lv_line_create(face_container_);
+    lv_line_set_points(right_eye_line_, right_eye_angle_pts, 3);
+    lv_obj_set_style_line_width(right_eye_line_, 2, 0);
+    lv_obj_set_style_line_color(right_eye_line_, lv_color_black(), 0);
+    lv_obj_set_size(right_eye_line_, 14, 20);
+    lv_obj_align(right_eye_line_, LV_ALIGN_RIGHT_MID, -24, 0);
+    lv_obj_add_flag(right_eye_line_, LV_OBJ_FLAG_HIDDEN);
+
+    left_eye_arc_ = lv_arc_create(face_container_);
+    lv_obj_set_size(left_eye_arc_, 28, 28);
+    lv_arc_set_rotation(left_eye_arc_, 0);
+    lv_arc_set_bg_angles(left_eye_arc_, 0, 360);
+    lv_obj_set_style_arc_width(left_eye_arc_, 0, LV_PART_MAIN);
+    lv_arc_set_angles(left_eye_arc_, 20, 160);
+    lv_obj_remove_style(left_eye_arc_, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(left_eye_arc_, 3, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(left_eye_arc_, lv_color_black(), LV_PART_INDICATOR);
+    lv_obj_align(left_eye_arc_, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_obj_add_flag(left_eye_arc_, LV_OBJ_FLAG_HIDDEN);
+    right_eye_arc_ = lv_arc_create(face_container_);
+    lv_obj_set_size(right_eye_arc_, 28, 28);
+    lv_arc_set_rotation(right_eye_arc_, 0);
+    lv_arc_set_bg_angles(right_eye_arc_, 0, 360);
+    lv_obj_set_style_arc_width(right_eye_arc_, 0, LV_PART_MAIN);
+    lv_arc_set_angles(right_eye_arc_, 20, 160);
+    lv_obj_remove_style(right_eye_arc_, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(right_eye_arc_, 3, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(right_eye_arc_, lv_color_black(), LV_PART_INDICATOR);
+    lv_obj_align(right_eye_arc_, LV_ALIGN_RIGHT_MID, -20, 0);
+    lv_obj_add_flag(right_eye_arc_, LV_OBJ_FLAG_HIDDEN);
+
+    // --- TẦNG 4: MIỆNG (48-64px) ---
+    mouth_ = lv_arc_create(screen);
+    lv_obj_set_size(mouth_, 24, 24);
     lv_arc_set_rotation(mouth_, 0);
     lv_arc_set_bg_angles(mouth_, 0, 360);
     lv_obj_set_style_arc_width(mouth_, 0, LV_PART_MAIN);
     lv_arc_set_angles(mouth_, 20, 160);
     lv_obj_remove_style(mouth_, NULL, LV_PART_KNOB);
-    lv_obj_set_style_arc_width(mouth_, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(mouth_, 3, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(mouth_, lv_color_black(), LV_PART_INDICATOR);
-    lv_obj_align(mouth_, LV_ALIGN_BOTTOM_MID, 0, -3);
+    lv_obj_align(mouth_, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_add_flag(face_container_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+
+    static const lv_point_precise_t mouth_dash_pts[] = {{0, 0}, {24, 0}};
+    mouth_line_ = lv_line_create(screen);
+    lv_line_set_points(mouth_line_, mouth_dash_pts, 2);
+    lv_obj_set_style_line_width(mouth_line_, 4, 0);
+    lv_obj_set_style_line_color(mouth_line_, lv_color_black(), 0);
+    lv_obj_set_size(mouth_line_, 24, 6);
+    lv_obj_align(mouth_line_, LV_ALIGN_TOP_MID, 0, 54);
+    lv_obj_add_flag(mouth_line_, LV_OBJ_FLAG_HIDDEN);
+
+    mode_hint_label_ = lv_label_create(screen);
+    lv_label_set_text(mode_hint_label_, "");
+    lv_obj_set_style_text_font(mode_hint_label_, text_font, 0);
+    lv_obj_set_style_text_color(mode_hint_label_, lv_color_black(), 0);
+    lv_obj_set_style_text_align(mode_hint_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(mode_hint_label_, LV_ALIGN_TOP_MID, 0, 52);
+    lv_obj_add_flag(mode_hint_label_, LV_OBJ_FLAG_HIDDEN);
 
     content_right_ = lv_obj_create(screen);
     lv_obj_set_size(content_right_, 128, 32);
@@ -535,28 +680,49 @@ void OledDisplay::SetEmotion(const char* emotion) {
     DisplayLockGuard lock(this);
     if (left_eye_ == nullptr || right_eye_ == nullptr) return;
 
-    int eye_width = 10;
-    int eye_height = 12;
+    current_emotion_ = emotion ? emotion : "";
+
+    if (left_eye_arc_ != nullptr) lv_obj_add_flag(left_eye_arc_, LV_OBJ_FLAG_HIDDEN);
+    if (right_eye_arc_ != nullptr) lv_obj_add_flag(right_eye_arc_, LV_OBJ_FLAG_HIDDEN);
+    if (mouth_line_ != nullptr) lv_obj_add_flag(mouth_line_, LV_OBJ_FLAG_HIDDEN);
+
+    int eye_width = 14;
+    int eye_height = 20;
     bool show_mouth = true;
     int mouth_start = 20;
     int mouth_end = 160;
 
     std::string emo = emotion;
-    if (emo.find("happy") != std::string::npos || emo.find("joy") != std::string::npos) {
-        eye_height = 12;
-        mouth_start = 0;
-        mouth_end = 180;
+    bool is_happy = (emo.find("happy") != std::string::npos || emo.find("joy") != std::string::npos);
+    if (is_happy) {
+        eye_width = 12;
+        eye_height = 6;
     } else if (emo.find("sad") != std::string::npos) {
-        eye_height = 5;
         show_mouth = true;
         mouth_start = 180;
         mouth_end = 360;
     } else if (emo.find("sleep") != std::string::npos) {
-        eye_height = 2;
-        show_mouth = false;
+        if (left_eye_arc_ != nullptr && right_eye_arc_ != nullptr) {
+            lv_obj_add_flag(left_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(right_eye_, LV_OBJ_FLAG_HIDDEN);
+            if (left_eye_line_ != nullptr) lv_obj_add_flag(left_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            if (right_eye_line_ != nullptr) lv_obj_add_flag(right_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(left_eye_arc_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(right_eye_arc_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (mouth_ != nullptr) lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+        if (mouth_line_ != nullptr) lv_obj_remove_flag(mouth_line_, LV_OBJ_FLAG_HIDDEN);
+        if (face_container_ != nullptr) lv_obj_invalidate(face_container_);
+        return;
     } else if (emo.find("thinking") != std::string::npos) {
-        lv_obj_set_size(left_eye_, 10, 12);
-        lv_obj_set_size(right_eye_, 10, 4);
+        if (left_eye_line_ != nullptr && right_eye_line_ != nullptr) {
+            lv_obj_add_flag(left_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(right_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(left_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(right_eye_, LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_obj_set_size(left_eye_, 14, 20);
+        lv_obj_set_size(right_eye_, 14, 4);
         if (mouth_) {
             lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_arc_set_angles(mouth_, 20, 160);
@@ -564,37 +730,52 @@ void OledDisplay::SetEmotion(const char* emotion) {
         if (face_container_ != nullptr) {
             lv_obj_invalidate(face_container_);
         }
-        if (status_left_eye_ != nullptr) {
-            lv_obj_set_size(status_left_eye_, 4, 6);
-            lv_obj_set_size(status_right_eye_, 4, 2);
-            if (status_mouth_) {
-                lv_obj_remove_flag(status_mouth_, LV_OBJ_FLAG_HIDDEN);
-                lv_arc_set_angles(status_mouth_, 20, 160);
-            }
-            lv_obj_invalidate(status_face_container_);
-        }
         return;
-    } else if (emo.find("speaking") != std::string::npos) {
-        eye_height = 12;
-        mouth_start = 10;
-        mouth_end = 170;
     } else if (emo.find("listening") != std::string::npos) {
-        eye_height = 12;
-        mouth_start = 40;
-        mouth_end = 140;
+        if (left_eye_line_ != nullptr && right_eye_line_ != nullptr) {
+            lv_obj_add_flag(left_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(left_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(right_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(right_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_size(right_eye_, 14, 20);
+        }
+        if (mouth_) {
+            lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+            lv_arc_set_angles(mouth_, 20, 160);
+            lv_obj_set_style_arc_width(mouth_, 3, LV_PART_INDICATOR);
+        }
+        if (face_container_ != nullptr) lv_obj_invalidate(face_container_);
+        return;
     } else {
-        eye_height = 12;
+        eye_height = 20;
         mouth_start = 20;
         mouth_end = 160;
     }
 
-    lv_obj_set_size(left_eye_, eye_width, eye_height);
-    lv_obj_set_size(right_eye_, eye_width, eye_height);
+    if (left_eye_line_ != nullptr && right_eye_line_ != nullptr) {
+        if (is_happy) {
+            lv_obj_add_flag(left_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(right_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(left_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(right_eye_line_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(left_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(right_eye_line_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(left_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(right_eye_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_size(left_eye_, eye_width, eye_height);
+            lv_obj_set_size(right_eye_, eye_width, eye_height);
+        }
+    } else {
+        lv_obj_set_size(left_eye_, eye_width, eye_height);
+        lv_obj_set_size(right_eye_, eye_width, eye_height);
+    }
 
     if (mouth_) {
         if (show_mouth) {
             lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_arc_set_angles(mouth_, mouth_start, mouth_end);
+            lv_obj_set_style_arc_width(mouth_, 3, LV_PART_INDICATOR);
         } else {
             lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         }
@@ -602,24 +783,6 @@ void OledDisplay::SetEmotion(const char* emotion) {
 
     if (face_container_ != nullptr) {
         lv_obj_invalidate(face_container_);
-    }
-
-    if (status_left_eye_ != nullptr) {
-        const int sw = 4;
-        int sh = 6;
-        if (emo.find("sad") != std::string::npos) sh = 2;
-        else if (emo.find("sleep") != std::string::npos) sh = 2;
-        lv_obj_set_size(status_left_eye_, sw, sh);
-        lv_obj_set_size(status_right_eye_, sw, sh);
-        if (status_mouth_) {
-            if (show_mouth) {
-                lv_obj_remove_flag(status_mouth_, LV_OBJ_FLAG_HIDDEN);
-                lv_arc_set_angles(status_mouth_, mouth_start, mouth_end);
-            } else {
-                lv_obj_add_flag(status_mouth_, LV_OBJ_FLAG_HIDDEN);
-            }
-        }
-        lv_obj_invalidate(status_face_container_);
     }
 }
 
